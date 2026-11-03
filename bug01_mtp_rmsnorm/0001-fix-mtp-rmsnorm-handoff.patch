@@ -1,0 +1,33 @@
+diff --git a/omlx/patches/mlx_lm_mtp/batch_generator.py b/omlx/patches/mlx_lm_mtp/batch_generator.py
+--- a/omlx/patches/mlx_lm_mtp/batch_generator.py
++++ b/omlx/patches/mlx_lm_mtp/batch_generator.py
+@@ -3813,12 +3813,28 @@
+         if retain_head and state.chain and state.head_history_primed:
+             if not state.head_clone:
+                 _mtp_head_trim_to(state.mtp_cache, state.hist_offset)
++            # DSpark models (DeepSeek-V4-Flash with dspark_block_size in config)
++            # carry their own head context (dspark_append_context / mtp_take_primed),
++            # so retain_parked_head_history is a no-op for them. The `hidden`
++            # captured here is the 12288-dim DSpark tap concatenation
++            # (concat[tap40, tap41, tap42]), NOT the 4096-dim trunk hidden that the
++            # MTP head consumes. Feeding it to `_head_input` makes the trunk
++            # RMSNorm(4096) run against 12288 dims and throws a dimension error on
++            # the very first handoff after a long prefill -> falls back to a
++            # full re-prefill of already-streamed tokens, collapsing throughput to
++            # ~1.5 tok/s and aborting the request. DSpark already ignores the value,
++            # so pass the tap concatenation through unchanged.
++            dspark_host_obj = _dspark_host(gen_batch.model)
++            if dspark_host_obj is not None:
++                retain_hidden = hidden[:, -1:]
++            else:
++                retain_hidden = _head_input(gen_batch.model, hidden[:, -1:])
+             _prompt_priming.retain_parked_head_history(
+                 gen_batch.model,
+                 state.uid,
+                 state.mtp_cache,
+                 state.hist_offset,
+-                _head_input(gen_batch.model, hidden[:, -1:]),
++                retain_hidden,
+                 gen_batch.prompt_cache,
+             )
+         last = _apply_processors(procs, prev_buf, logits[:, -1, :])
