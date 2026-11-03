@@ -1,0 +1,23 @@
+diff --git a/omlx/patches/mlx_lm_mtp/batch_policy.py b/omlx/patches/mlx_lm_mtp/batch_policy.py
+--- a/omlx/patches/mlx_lm_mtp/batch_policy.py
++++ b/omlx/patches/mlx_lm_mtp/batch_policy.py
+@@ -132,7 +132,18 @@
+                 self.last_probe_ms = self.elapsed_ms
+ 
+     def should_park(self):
+-        return not self.fixed and (self.losing >= 16 or self.clear_losing >= 4)
++        # A freshly rebuilt cohort policy has an empty ``standard`` deque, so
++        # ``score(0)`` returns ``0.0`` and ``losing`` accumulates blindly on
++        # every pure-MTP decision. If it then parks, the park path calls
++        # ``median(self.standard)`` over an empty deque and raises
++        # ``statistics.StatisticsError: no median for empty data``, killing
++        # the whole engine step. Without a calibrated baseline we must never
++        # park. (Upstream v0.7.3 still lacks this guard.)
++        return (
++            not self.fixed
++            and bool(self.standard)
++            and (self.losing >= 16 or self.clear_losing >= 4)
++        )
+ 
+     def park(self):
+         self.start_parked(self.cooldown)
