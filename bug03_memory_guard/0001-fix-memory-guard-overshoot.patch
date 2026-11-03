@@ -1,0 +1,40 @@
+diff --git a/omlx/settings.py b/omlx/settings.py
+--- a/omlx/settings.py
++++ b/omlx/settings.py
+@@ -608,12 +608,33 @@
+         tier = str(data.get("memory_guard_tier", "balanced")).lower()
+         if tier not in VALID_MEMORY_GUARD_TIERS:
+             tier = "balanced"
++        custom_ceiling = float(data.get("memory_guard_custom_ceiling_gb", 0.0))
++        # process_memory_enforcer: on very large machines (e.g. 256GB with
++        # 140-170GB of resident weights) the "balanced" tier reaps on a
++        # dynamic watermark (free+inactive, often <20GB) every second. A large
++        # prompt push crosses it and the enforcer "gracefully" kills the
++        # server -- unloading every model, exiting the process, and on macOS
++        # logging the user out (crash loop). Fix: pin machines with >=48GB RAM
++        # to the "custom" tier with a static, panic-safe ceiling of RAM-16GB.
++        # A user-supplied custom ceiling is respected when present.
++        if tier != "custom":
++            try:
++                _ram_gb = get_system_memory() / (1024**3)
++                if _ram_gb >= 48:
++                    import logging as _lg
++                    _lg.getLogger(__name__).warning(
++                        "memory-guard patch: forcing tier %s -> custom on a "
++                        "%.0fGB machine (balanced would self-kill the server)",
++                        tier, _ram_gb)
++                    tier = "custom"
++                    if custom_ceiling <= 0:
++                        custom_ceiling = round(_ram_gb - 16, 1)
++            except Exception:
++                pass
+         return cls(
+             prefill_memory_guard=data.get("prefill_memory_guard", True),
+             memory_guard_tier=tier,  # type: ignore[arg-type]
+-            memory_guard_custom_ceiling_gb=float(
+-                data.get("memory_guard_custom_ceiling_gb", 0.0)
+-            ),
++            memory_guard_custom_ceiling_gb=custom_ceiling,
+             soft_threshold=float(data.get("soft_threshold", 0.85)),
+             hard_threshold=float(data.get("hard_threshold", 0.95)),
+             prefill_safe_zone_ratio=float(data.get("prefill_safe_zone_ratio", 0.80)),
